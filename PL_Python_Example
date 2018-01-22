@@ -1,5 +1,6 @@
 --------------------------------------------------
 -- Examples of using PL/Python in GPDB, PostgreSQL
+-- reference : by Ian Huston (http://nbviewer.jupyter.org/github/ihuston/plpython_examples/blob/master/simple_sql_example_notebook.ipynb)
 --------------------------------------------------
 
 -- Create schema for PL/Python
