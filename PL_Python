@@ -1,0 +1,138 @@
+--------------------------------------------------
+-- Examples of using PL/Python in GPDB, PostgreSQL
+--------------------------------------------------
+
+-- Create schema for PL/Python
+DROP SCHEMA IF EXISTS plp CASCADE;
+CREATE SCHEMA plp;
+
+-- Simple SQL User Defined Function
+CREATE OR REPLACE FUNCTION plp.times2(INT) 
+RETURNS INT
+AS $$
+	SELECT 2*$1;
+$$ LANGUAGE sql;
+
+SELECT plp.times2(10);
+
+-- PL/Python test code
+CREATE OR REPLACE FUNCTION plp.pymax (a integer, b integer)
+RETURNS integer
+AS $$
+if a > b:
+    return a
+return b
+$$ LANGUAGE plpythonu;
+
+SELECT plp.pymax(10, 5);
+
+
+-- Create a composite return type
+DROP TYPE IF EXISTS plp.named_value;
+CREATE TYPE plp.named_value AS (
+	name text, 
+	value integer
+);
+
+-- Simple function which returns a composite object
+CREATE OR REPLACE FUNCTION plp.make_pair (name TEXT, value INTEGER)
+RETURNS plp.named_value
+AS $$
+#return [ name, value ]
+return {"name": name, "value": value}
+$$ LANGUAGE plpythonu;
+
+SELECT plp.make_pair('Zozimus', 1);
+
+
+-- Using NumPy inside a PL/Python function
+CREATE OR REPLACE FUNCTION plp.make_pair (name text) 
+RETURNS plp.named_value
+AS $$
+import numpy as np
+a = np.arange(100)
+return [name, a[2]]
+$$ LANGUAGE plpythonu;
+
+SELECT plp.make_pair('Horatio');
+
+
+-- Retruning a set of results using SETOF
+CREATE OR REPLACE FUNCTION make_pair_sets (name TEXT)
+RETURNS SETOF plp.named_value
+AS $$
+import numpy as np
+return ((name, i) for i in np.arange(3))
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM make_pair_sets('Gerald');
+
+
+------------------------------------
+-- Parallelisation with PL/Python
+------------------------------------
+-- Set up some data to show parallelisation
+
+DROP TABLE IF EXISTS plp.test_data;
+CREATE TABLE plp.test_data AS 
+SELECT 
+	'a'::text AS name, 
+	generate_series(0, 1000000)::float AS x, 
+	generate_series(0, 1000000)/100.0 AS y
+DISTRIBUTED BY (name);
+
+INSERT INTO plp.test_data 
+SELECT 
+	'b'::text AS name,  
+	generate_series(0, 1000000)::float AS x, 
+	generate_series(0, 1000000)/100.0 AS y;
+
+INSERT INTO plp.test_data
+SELECT 
+	'c'::text AS name, 
+	generate_series(0, 1000000)::float AS x, 
+	generate_series(0, 1000000)/100.0 AS y;
+
+SELECT * FROM plp.test_data LIMIT 10;
+
+-- Create a function to find the mean of some numbers
+DROP FUNCTION IF EXISTS plp.np_mean(double precision[]);
+CREATE OR REPLACE FUNCTION plp.np_mean(value_array double precision[])
+RETURNS float
+AS $$
+import numpy as np
+return np.mean(value_array)
+$$ LANGUAGE plpythonu;
+
+-- Need to pass the numbers as an array using array_agg
+SELECT plp.np_mean(array_agg(y)) FROM plp.test_data;
+
+-- (**) Now try to do this for each type of data in parallel by grouping
+SELECT 
+	name, 
+	plp.np_mean(array_agg(y))
+FROM plp.test_data
+GROUP BY name 
+ORDER BY name;
+
+
+---------------------------
+-- Linear Regression
+DROP FUNCTION IF EXISTS plp.linregr(double precision[]);
+CREATE OR REPLACE FUNCTION
+	plp.linregr(x double precision[], y double precision[])
+RETURNS float[]
+AS $$
+from scipy import stats
+return stats.linregress(x, y)
+$$ LANGUAGE plpythonu;
+
+-- Do linear regression for all data
+SELECT plp.linregr(array_agg(x), array_agg(y))
+	FROM plp.test_data;
+
+-- Do linear regression separately for each 'name'
+SELECT name, plp.linregr(array_agg(x), array_agg(y))
+	FROM plp.test_data
+	GROUP BY name
+	ORDER BY name;
